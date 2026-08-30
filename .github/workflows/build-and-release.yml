@@ -1,0 +1,151 @@
+name: Build and Package Generic WinUSB Driver
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Package & Release WinUSB Driver (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Windows Driver Kit (WDK for Inf2Cat)
+        shell: powershell
+        run: |
+          Write-Host "Installing Windows Driver Kit for Inf2Cat catalog generation..." -ForegroundColor Cyan
+          $wdkPath = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\Inf2Cat.exe"
+          if (Test-Path $wdkPath) {
+            Write-Host "Inf2Cat is already available at $wdkPath" -ForegroundColor Green
+          } else {
+            winget install --id Microsoft.WindowsWDK.10.0.26100 --exact --accept-source-agreements --accept-package-agreements --silent --disable-interactivity
+          }
+
+      - name: Create Self-Signed Code Signing Certificate
+        shell: powershell
+        run: |
+          Write-Host "Generating Code Signing Certificate for WinUSB Driver Catalog Signing..." -ForegroundColor Cyan
+          $certDir = "build\Certificates"
+          New-Item -ItemType Directory -Force -Path $certDir | Out-Null
+
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+                    -Subject "CN=Generic WinUSB Driver Code Signing" `
+                    -KeySpec Signature `
+                    -KeyLength 2048 `
+                    -KeyAlgorithm RSA `
+                    -HashAlgorithm SHA256 `
+                    -CertStoreLocation "Cert:\CurrentUser\My" `
+                    -NotAfter (Get-Date).AddYears(10)
+
+          # Export Public CER
+          Export-Certificate -Cert $cert -FilePath "$certDir\WinUSBDriverTestCert.cer" | Out-Null
+
+          # Export PFX
+          $pfxPassword = ConvertTo-SecureString -String "Password123!" -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath "$certDir\WinUSBDriverTestCert.pfx" -Password $pfxPassword | Out-Null
+
+          # Import to trusted store
+          Import-Certificate -FilePath "$certDir\WinUSBDriverTestCert.cer" -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
+          Import-Certificate -FilePath "$certDir\WinUSBDriverTestCert.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPublisher" | Out-Null
+
+          Write-Host "Certificate ready." -ForegroundColor Green
+
+      - name: Generate Catalogs & Package Drivers
+        shell: powershell
+        run: |
+          Write-Host "Locating SignTool and Inf2Cat..." -ForegroundColor Cyan
+          $searchRoots = @(
+            "C:\Program Files (x86)\Windows Kits\10\bin",
+            "C:\Program Files (x86)\Windows Kits",
+            "C:\Program Files\Microsoft Visual Studio"
+          )
+
+          $signtool = $null
+          $inf2cat = $null
+
+          foreach ($root in $searchRoots) {
+            if (Test-Path $root) {
+              if (-not $signtool) {
+                $st = Get-ChildItem -Path $root -Recurse -Filter "signtool.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*x64*" } | Select-Object -First 1
+                if ($st) { $signtool = $st.FullName }
+              }
+              if (-not $inf2cat) {
+                $ic = Get-ChildItem -Path $root -Recurse -Filter "Inf2Cat.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($ic) { $inf2cat = $ic.FullName }
+              }
+            }
+          }
+
+          Write-Host "SignTool: $signtool" -ForegroundColor Green
+          Write-Host "Inf2Cat: $inf2cat" -ForegroundColor Green
+
+          $distRoot = "dist\Generic-WinUSB-Driver-x64"
+          New-Item -ItemType Directory -Force -Path "$distRoot\drivers" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$distRoot\Certificates" | Out-Null
+
+          # Copy Certificates
+          Copy-Item "build\Certificates\WinUSBDriverTestCert.cer" "$distRoot\Certificates\" -Force
+
+          # Copy Driver INF files
+          Copy-Item "drivers\generic-winusb\*" "$distRoot\drivers\" -Force
+
+          # Generate & Sign .cat files
+          $pfxFile = "build\Certificates\WinUSBDriverTestCert.pfx"
+          $driverDir = "$distRoot\drivers"
+
+          if ($inf2cat) {
+            Write-Host "Generating catalog for $driverDir..." -ForegroundColor Cyan
+            & $inf2cat /driver:$driverDir /os:10_X64,10_RS5_X64,10_19H1_X64 /verbose
+            $catFiles = Get-ChildItem -Path $driverDir -Filter "*.cat"
+            foreach ($cat in $catFiles) {
+              if ($signtool) {
+                Write-Host "Signing catalog $($cat.FullName)..." -ForegroundColor Cyan
+                try {
+                  & $signtool sign /f $pfxFile /p "Password123!" /fd SHA256 /tr "http://timestamp.digicert.com" /td SHA256 $cat.FullName
+                } catch {
+                  & $signtool sign /f $pfxFile /p "Password123!" /fd SHA256 $cat.FullName
+                }
+              }
+            }
+          }
+
+          # Copy Scripts & Documentation
+          Copy-Item "scripts\Install-Driver.bat" "$distRoot\" -Force
+          Copy-Item "scripts\Install-Driver.ps1" "$distRoot\" -Force
+          Copy-Item "README.md" "$distRoot\" -Force
+
+          # Create ZIP Archive
+          Write-Host "Compressing package to ZIP..." -ForegroundColor Green
+          $zipPath = "dist\Generic-WinUSB-Driver-x64.zip"
+          Compress-Archive -Path "$distRoot\*" -DestinationPath $zipPath -Force
+          Write-Host "ZIP Created: $zipPath" -ForegroundColor Green
+
+      - name: Upload Driver Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Generic-WinUSB-Driver-x64
+          path: dist/Generic-WinUSB-Driver-x64.zip
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Generic-WinUSB-Driver-x64.zip
+          draft: false
+          prerelease: false

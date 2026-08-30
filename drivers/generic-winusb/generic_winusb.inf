@@ -1,0 +1,54 @@
+; =======================================================================
+; Generic WinUSB Driver Package for USB Raw Endpoint & Device Access
+; Platform: Windows 10 / 11 64-bit (x64)
+; =======================================================================
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = USBDevice
+ClassGUID   = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider    = %ProviderName%
+DriverVer   = 10/01/2023,1.0.0.0
+CatalogFile = generic_winusb.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTAMD64
+
+[Standard.NTAMD64]
+%DeviceName% = USB_Install, USB\MS_COMP_WINUSB
+%DeviceName% = USB_Install, USB\VID_05AC&PID_1227
+%DeviceName% = USB_Install, USB\VID_05AC&PID_1281
+%DeviceName% = USB_Install, USB\VID_FFFF&PID_0001
+%DeviceName% = USB_Install, USB\VID_1FC9&PID_0130
+
+[USB_Install]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[USB_Install.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[USB_Install.HW]
+AddReg = Dev_AddReg
+
+[Dev_AddReg]
+HKR,,DeviceInterfaceGUIDs,0x10000,"{A5DCBF10-6530-11D2-901F-00C04FB951ED}"
+
+[Strings]
+ProviderName     = "Generic USB Driver Project"
+ManufacturerName = "Generic USB Community"
+DiskName         = "Generic WinUSB Driver Installation Media"
+DeviceName       = "Generic WinUSB Raw Communication Device"
