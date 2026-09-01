@@ -31,3 +31,9 @@ Repositori ini menyediakan paket driver **Generic WinUSB** untuk mengaktifkan ak
 ## 📄 Lisensi
 
 Proyek ini dilisensikan di bawah [MIT License](LICENSE).
+
+---
+
+<p align="center">
+  Dibuat dengan ❤️ oleh <b>Muhammad Fikri Dev</b>
+</p>
